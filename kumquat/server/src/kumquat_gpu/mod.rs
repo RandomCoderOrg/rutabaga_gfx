@@ -486,20 +486,39 @@ impl KumquatGpuConnection {
                         .rutabaga
                         .context_attach_resource(cmd.ctx_id, resource_id)?;
                 }
-                KumquatGpuProtocol::ResourceFlush(cmd) => {
+                KumquatGpuProtocol::ResourceFlush(cmd, acquire_fence) => {
                     if !kumquat_gpu.resources.contains_key(&cmd.resource_id) {
                         return Err(RutabagaError::InvalidResourceId.into());
                     }
                     kumquat_gpu.rutabaga.resource_flush(cmd.resource_id)?;
-                    if let Some(presenter) = kumquat_gpu.presenter.as_mut() {
+                    let release_fence = if let Some(presenter) = kumquat_gpu.presenter.as_mut() {
                         presenter.register_resource(&mut kumquat_gpu.rutabaga, cmd.resource_id)?;
-                    }
-
-                    let resp = kumquat_gpu_protocol_ctrl_hdr {
-                        type_: KUMQUAT_GPU_PROTOCOL_RESP_NODATA,
-                        payload: 0,
+                        let acquire_fence = acquire_fence.ok_or(MagmaGpuError::WithContext(
+                            "uDroid presentation requires an acquire fence",
+                        ))?;
+                        Some(presenter.present_resource(cmd.resource_id, acquire_fence)?)
+                    } else {
+                        None
                     };
-                    self.stream.write(KumquatGpuProtocolWrite::Cmd(resp))?;
+
+                    if let Some(release_fence) = release_fence {
+                        let resp = kumquat_gpu_protocol_resp_resource_flush {
+                            hdr: kumquat_gpu_protocol_ctrl_hdr {
+                                type_: KUMQUAT_GPU_PROTOCOL_RESP_RESOURCE_FLUSH,
+                                payload: 0,
+                            },
+                            resource_id: cmd.resource_id,
+                            handle_type: release_fence.handle_type,
+                        };
+                        self.stream
+                            .write(KumquatGpuProtocolWrite::CmdWithHandle(resp, release_fence))?;
+                    } else {
+                        let resp = kumquat_gpu_protocol_ctrl_hdr {
+                            type_: KUMQUAT_GPU_PROTOCOL_RESP_NODATA,
+                            payload: 0,
+                        };
+                        self.stream.write(KumquatGpuProtocolWrite::Cmd(resp))?;
+                    }
                 }
                 KumquatGpuProtocol::SnapshotSave => {
                     kumquat_gpu.rutabaga.snapshot(Path::new(SNAPSHOT_DIR))?;

@@ -161,11 +161,27 @@ impl KumquatStream {
                     KumquatGpuProtocol::ResourceCreateBlob(reader.read_obj()?)
                 }
                 KUMQUAT_GPU_PROTOCOL_RESOURCE_FLUSH => {
-                    KumquatGpuProtocol::ResourceFlush(reader.read_obj()?)
+                    let cmd = reader.read_obj()?;
+                    let handle = descriptors.pop_front().map(|os_handle| Handle {
+                        os_handle,
+                        handle_type: MAGMA_GPU_HANDLE_TYPE_SIGNAL_EVENT_FD,
+                    });
+                    KumquatGpuProtocol::ResourceFlush(cmd, handle)
                 }
                 KUMQUAT_GPU_PROTOCOL_RESP_NODATA => {
                     reader.consume(size_of::<kumquat_gpu_protocol_ctrl_hdr>());
                     KumquatGpuProtocol::RespNoData
+                }
+                KUMQUAT_GPU_PROTOCOL_RESP_RESOURCE_FLUSH => {
+                    let resp: kumquat_gpu_protocol_resp_resource_flush = reader.read_obj()?;
+                    let os_handle = descriptors.pop_front().ok_or(Error::Unsupported)?;
+                    KumquatGpuProtocol::RespResourceFlush(
+                        resp.resource_id,
+                        Handle {
+                            os_handle,
+                            handle_type: resp.handle_type,
+                        },
+                    )
                 }
                 KUMQUAT_GPU_PROTOCOL_SNAPSHOT_SAVE => {
                     reader.consume(size_of::<kumquat_gpu_protocol_ctrl_hdr>());
@@ -261,9 +277,10 @@ mod tests {
             .expect("parse resource flush");
         assert_eq!(messages.len(), 1);
         match &messages[0] {
-            KumquatGpuProtocol::ResourceFlush(actual) => {
+            KumquatGpuProtocol::ResourceFlush(actual, handle) => {
                 assert_eq!(actual.rect, expected.rect);
                 assert_eq!(actual.resource_id, expected.resource_id);
+                assert!(handle.is_none());
             }
             other => panic!("unexpected protocol message: {other:?}"),
         }
