@@ -56,6 +56,7 @@ pub const KUMQUAT_GPU_PROTOCOL_GET_NUM_CAPSETS: u32 = 0x101;
 pub const KUMQUAT_GPU_PROTOCOL_GET_CAPSET_INFO: u32 = 0x102;
 pub const KUMQUAT_GPU_PROTOCOL_GET_CAPSET: u32 = 0x103;
 pub const KUMQUAT_GPU_PROTOCOL_RESOURCE_CREATE_BLOB: u32 = 0x104;
+pub const KUMQUAT_GPU_PROTOCOL_RESOURCE_FLUSH: u32 = 0x105;
 
 /* 3d commands */
 pub const KUMQUAT_GPU_PROTOCOL_CTX_CREATE: u32 = 0x200;
@@ -97,6 +98,26 @@ pub struct kumquat_gpu_protocol_box {
     pub w: u32,
     pub h: u32,
     pub d: u32,
+}
+
+/// A two-dimensional region following the virtio-gpu resource-flush layout.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, FromBytes, IntoBytes, Immutable)]
+#[repr(C)]
+pub struct kumquat_gpu_protocol_rect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/* KUMQUAT_GPU_PROTOCOL_RESOURCE_FLUSH */
+#[derive(Copy, Clone, Debug, Default, FromBytes, IntoBytes, Immutable)]
+#[repr(C)]
+pub struct kumquat_gpu_protocol_resource_flush {
+    pub hdr: kumquat_gpu_protocol_ctrl_hdr,
+    pub rect: kumquat_gpu_protocol_rect,
+    pub resource_id: u32,
+    pub padding: u32,
 }
 
 /* KUMQUAT_GPU_PROTOCOL_TRANSFER_TO_HOST_3D, KUMQUAT_GPU_PROTOCOL_TRANSFER_FROM_HOST_3D */
@@ -252,6 +273,7 @@ pub enum KumquatGpuProtocol {
     TransferFromHost3d(kumquat_gpu_protocol_transfer_host_3d, Handle),
     CmdSubmit3d(kumquat_gpu_protocol_cmd_submit, Vec<u8>, Vec<u64>),
     ResourceCreateBlob(kumquat_gpu_protocol_resource_create_blob),
+    ResourceFlush(kumquat_gpu_protocol_resource_flush),
     SnapshotSave,
     SnapshotRestore,
     RespNumCapsets(u32),

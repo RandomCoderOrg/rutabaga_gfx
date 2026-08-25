@@ -65,16 +65,22 @@ impl KumquatStream {
     }
 
     pub fn read(&mut self) -> Result<Vec<KumquatGpuProtocol>> {
-        let mut vec: Vec<KumquatGpuProtocol> = Vec::new();
         let (bytes_read, descriptor_vec) = self.stream.receive(&mut self.read_buffer)?;
-        let mut descriptors: VecDeque<OwnedDescriptor> = descriptor_vec.into();
+        Self::decode(&self.read_buffer[0..bytes_read], descriptor_vec.into())
+    }
 
-        if bytes_read == 0 {
+    fn decode(
+        read_buffer: &[u8],
+        mut descriptors: VecDeque<OwnedDescriptor>,
+    ) -> Result<Vec<KumquatGpuProtocol>> {
+        let mut vec: Vec<KumquatGpuProtocol> = Vec::new();
+
+        if read_buffer.is_empty() {
             vec.push(KumquatGpuProtocol::OkNoData);
             return Ok(vec);
         }
 
-        let mut reader = Reader::new(&self.read_buffer[0..bytes_read]);
+        let mut reader = Reader::new(read_buffer);
         while reader.available_bytes() != 0 {
             let hdr = reader.peek_obj::<kumquat_gpu_protocol_ctrl_hdr>()?;
             let protocol = match hdr.type_ {
@@ -154,6 +160,9 @@ impl KumquatStream {
                 KUMQUAT_GPU_PROTOCOL_RESOURCE_CREATE_BLOB => {
                     KumquatGpuProtocol::ResourceCreateBlob(reader.read_obj()?)
                 }
+                KUMQUAT_GPU_PROTOCOL_RESOURCE_FLUSH => {
+                    KumquatGpuProtocol::ResourceFlush(reader.read_obj()?)
+                }
                 KUMQUAT_GPU_PROTOCOL_SNAPSHOT_SAVE => {
                     reader.consume(size_of::<kumquat_gpu_protocol_ctrl_hdr>());
                     KumquatGpuProtocol::SnapshotSave
@@ -219,5 +228,40 @@ impl KumquatStream {
 
     pub fn as_borrowed_descriptor(&self) -> &OwnedDescriptor {
         self.stream.as_borrowed_descriptor()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zerocopy::IntoBytes;
+
+    #[test]
+    fn resource_flush_decodes_from_wire_layout() {
+        let expected = kumquat_gpu_protocol_resource_flush {
+            hdr: kumquat_gpu_protocol_ctrl_hdr {
+                type_: KUMQUAT_GPU_PROTOCOL_RESOURCE_FLUSH,
+                payload: 0,
+            },
+            rect: kumquat_gpu_protocol_rect {
+                x: 17,
+                y: 29,
+                width: 640,
+                height: 360,
+            },
+            resource_id: 42,
+            padding: 0,
+        };
+
+        let messages = KumquatStream::decode(expected.as_bytes(), VecDeque::new())
+            .expect("parse resource flush");
+        assert_eq!(messages.len(), 1);
+        match &messages[0] {
+            KumquatGpuProtocol::ResourceFlush(actual) => {
+                assert_eq!(actual.rect, expected.rect);
+                assert_eq!(actual.resource_id, expected.resource_id);
+            }
+            other => panic!("unexpected protocol message: {other:?}"),
+        }
     }
 }
