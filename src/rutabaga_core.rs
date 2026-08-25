@@ -14,6 +14,8 @@ use magma_gpu::util::Error as MagmaGpuError;
 use magma_gpu::util::Handle as MagmaGpuHandle;
 use magma_gpu::util::MemoryMapping;
 use magma_gpu::util::OwnedDescriptor;
+#[cfg(gfxstream_unstable)]
+use magma_gpu::util::RawDescriptor;
 use magma_gpu::util::RawMapping;
 use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_SHM;
 use serde::Deserialize;
@@ -301,6 +303,16 @@ pub trait RutabagaComponent {
 
     /// Implementations must flush the given resource to the display.
     fn resource_flush(&self, _resource_id: &mut RutabagaResource) -> RutabagaResult<()> {
+        Err(MagmaGpuError::Unsupported.into())
+    }
+
+    /// Sends an Android hardware-buffer resource over a connected Unix socket.
+    #[cfg(gfxstream_unstable)]
+    fn resource_send_hardware_buffer(
+        &self,
+        _resource: &RutabagaResource,
+        _socket_fd: RawDescriptor,
+    ) -> RutabagaResult<()> {
         Err(MagmaGpuError::Unsupported.into())
     }
 
@@ -919,6 +931,26 @@ impl Rutabaga {
             .ok_or(RutabagaError::InvalidResourceId)?;
 
         component.resource_flush(resource)
+    }
+
+    /// Sends an Android hardware-buffer resource over a connected Unix socket.
+    #[cfg(gfxstream_unstable)]
+    pub fn resource_send_hardware_buffer(
+        &self,
+        resource_id: u32,
+        socket_fd: RawDescriptor,
+    ) -> RutabagaResult<()> {
+        let component = self
+            .components
+            .get(&self.default_component)
+            .ok_or(MagmaGpuError::Unsupported)?;
+
+        let resource = self
+            .resources
+            .get(&resource_id)
+            .ok_or(RutabagaError::InvalidResourceId)?;
+
+        component.resource_send_hardware_buffer(resource, socket_fd)
     }
 
     pub fn set_scanout(

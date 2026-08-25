@@ -213,6 +213,8 @@ extern "C" {
     fn stream_renderer_fill_caps(set: u32, version: u32, caps: *mut c_void);
 
     fn stream_renderer_flush(res_handle: u32);
+    #[cfg(gfxstream_unstable)]
+    fn stream_renderer_resource_send_hardware_buffer(res_handle: u32, socket_fd: c_int) -> c_int;
     fn stream_renderer_create_blob(
         ctx_id: u32,
         res_handle: u32,
@@ -890,6 +892,21 @@ impl RutabagaComponent for Gfxstream {
             stream_renderer_flush(resource.resource_id);
         }
         Ok(())
+    }
+
+    #[cfg(gfxstream_unstable)]
+    fn resource_send_hardware_buffer(
+        &self,
+        resource: &RutabagaResource,
+        socket_fd: RawDescriptor,
+    ) -> RutabagaResult<()> {
+        // SAFETY:
+        // The resource belongs to this initialized gfxstream component and the
+        // caller retains ownership of the connected Unix socket descriptor.
+        let ret = unsafe {
+            stream_renderer_resource_send_hardware_buffer(resource.resource_id, socket_fd)
+        };
+        ret_to_res(ret)
     }
 
     fn create_blob(
