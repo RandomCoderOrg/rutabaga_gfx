@@ -4,6 +4,7 @@
 use std::ffi::c_void;
 
 use crate::protocols::kumquat_gpu_protocol::kumquat_gpu_protocol_box;
+use crate::protocols::kumquat_gpu_protocol::kumquat_gpu_protocol_rect;
 use crate::protocols::kumquat_gpu_protocol::VulkanInfo;
 
 pub const VIRTGPU_KUMQUAT_PARAM_3D_FEATURES: u64 = 1;
@@ -74,6 +75,7 @@ pub struct VirtGpuResourceCreate3D {
 }
 
 pub type VirtGpuBox = kumquat_gpu_protocol_box;
+pub type VirtGpuRect = kumquat_gpu_protocol_rect;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]

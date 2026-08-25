@@ -261,6 +261,7 @@ pub struct kumquat_gpu_protocol_resp_cmd_submit_3d {
 #[derive(Debug)]
 pub enum KumquatGpuProtocol {
     OkNoData,
+    RespNoData,
     GetNumCapsets,
     GetCapsetInfo(u32),
     GetCapset(kumquat_gpu_protocol_get_capset),

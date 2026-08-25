@@ -8,8 +8,8 @@ use std::slice::from_raw_parts_mut;
 
 use crate::protocols::ipc::KumquatStream;
 use crate::protocols::kumquat_gpu_protocol::*;
-use crate::util::Error;
 use crate::util::create_event_pair;
+use crate::util::Error;
 use crate::util::EventWaiter;
 use crate::util::Handle;
 use crate::util::IntoRawDescriptor;
@@ -303,6 +303,27 @@ impl VirtGpuKumquat {
             .write(KumquatGpuProtocolWrite::Cmd(detach_resource))?;
 
         Ok(())
+    }
+
+    pub fn resource_flush(&mut self, bo_handle: u32, rect: VirtGpuRect) -> Result<()> {
+        let resource = self.resources.get(&bo_handle).ok_or(Error::Unsupported)?;
+        let resource_flush = kumquat_gpu_protocol_resource_flush {
+            hdr: kumquat_gpu_protocol_ctrl_hdr {
+                type_: KUMQUAT_GPU_PROTOCOL_RESOURCE_FLUSH,
+                ..Default::default()
+            },
+            rect,
+            resource_id: resource.resource_id,
+            padding: 0,
+        };
+
+        self.stream
+            .write(KumquatGpuProtocolWrite::Cmd(resource_flush))?;
+        let mut protocols = self.stream.read()?;
+        match protocols.remove(0) {
+            KumquatGpuProtocol::RespNoData => Ok(()),
+            _ => Err(Error::Unsupported),
+        }
     }
 
     pub fn map(&mut self, bo_handle: u32) -> Result<RawMapping> {

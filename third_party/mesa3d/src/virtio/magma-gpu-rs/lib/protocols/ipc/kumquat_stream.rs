@@ -163,6 +163,10 @@ impl KumquatStream {
                 KUMQUAT_GPU_PROTOCOL_RESOURCE_FLUSH => {
                     KumquatGpuProtocol::ResourceFlush(reader.read_obj()?)
                 }
+                KUMQUAT_GPU_PROTOCOL_RESP_NODATA => {
+                    reader.consume(size_of::<kumquat_gpu_protocol_ctrl_hdr>());
+                    KumquatGpuProtocol::RespNoData
+                }
                 KUMQUAT_GPU_PROTOCOL_SNAPSHOT_SAVE => {
                     reader.consume(size_of::<kumquat_gpu_protocol_ctrl_hdr>());
                     KumquatGpuProtocol::SnapshotSave
@@ -263,5 +267,20 @@ mod tests {
             }
             other => panic!("unexpected protocol message: {other:?}"),
         }
+    }
+
+    #[test]
+    fn no_data_response_is_not_decoded_as_hangup() {
+        let response = kumquat_gpu_protocol_ctrl_hdr {
+            type_: KUMQUAT_GPU_PROTOCOL_RESP_NODATA,
+            payload: 0,
+        };
+
+        let messages = KumquatStream::decode(response.as_bytes(), VecDeque::new())
+            .expect("parse no-data response");
+        assert!(matches!(
+            messages.as_slice(),
+            [KumquatGpuProtocol::RespNoData]
+        ));
     }
 }
