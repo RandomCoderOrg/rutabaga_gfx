@@ -22,6 +22,7 @@ use magma_gpu::util::MemoryMapping;
 use magma_gpu::util::OwnedDescriptor;
 use magma_gpu::util::SharedMemory;
 use magma_gpu::util::Tube;
+use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF;
 use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_SHM;
 use remain::sorted;
 use rutabaga_gfx::calculate_capset_mask;
@@ -32,6 +33,7 @@ use rutabaga_gfx::RutabagaBuilder;
 use rutabaga_gfx::RutabagaError;
 use rutabaga_gfx::RutabagaFence;
 use rutabaga_gfx::RutabagaFenceHandler;
+use rutabaga_gfx::RutabagaHandle;
 use rutabaga_gfx::RutabagaIovec;
 use rutabaga_gfx::RutabagaWsi;
 use rutabaga_gfx::Transfer3D;
@@ -448,8 +450,24 @@ impl KumquatGpuConnection {
                         None,
                     )?;
 
-                    let handle = kumquat_gpu.rutabaga.export_blob(resource_id)?;
-                    let handle = MagmaGpuHandle::try_from(handle)?;
+                    let exported = kumquat_gpu.rutabaga.export_blob(resource_id)?;
+                    let handle = match exported {
+                        RutabagaHandle::MagmaGpuHandle(handle) => handle,
+                        RutabagaHandle::AhbInfo(mut info) => {
+                            // Kumquat's resource-create response currently carries one descriptor.
+                            // The first AHB descriptor is the allocation dma-buf needed by the guest
+                            // Vulkan mapper; full AHB metadata travels separately to the presenter.
+                            let os_handle = info
+                                .fds
+                                .drain(..1)
+                                .next()
+                                .ok_or(MagmaGpuError::InvalidMagmaHandle)?;
+                            MagmaGpuHandle {
+                                os_handle,
+                                handle_type: MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF,
+                            }
+                        }
+                    };
                     let mut vk_info: RutabagaVulkanInfo = Default::default();
                     if let Ok(vulkan_info) = kumquat_gpu.rutabaga.vulkan_info(resource_id) {
                         vk_info = vulkan_info;

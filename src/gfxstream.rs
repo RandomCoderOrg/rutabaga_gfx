@@ -23,6 +23,48 @@ use std::ptr::null;
 use std::ptr::null_mut;
 use std::sync::Arc;
 
+#[cfg(target_os = "android")]
+#[repr(C)]
+struct AndroidHardwareBuffer {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "android")]
+#[repr(C)]
+struct AndroidHardwareBufferDesc {
+    width: u32,
+    height: u32,
+    layers: u32,
+    format: u32,
+    usage: u64,
+    stride: u32,
+    rfu0: u32,
+    rfu1: u64,
+}
+
+#[cfg(target_os = "android")]
+#[repr(C)]
+struct AndroidNativeHandle {
+    version: c_int,
+    num_fds: c_int,
+    num_ints: c_int,
+    data: [c_int; 0],
+}
+
+#[cfg(target_os = "android")]
+#[link(name = "android")]
+unsafe extern "C" {
+    fn AHardwareBuffer_acquire(buffer: *mut AndroidHardwareBuffer);
+    fn AHardwareBuffer_release(buffer: *mut AndroidHardwareBuffer);
+    fn AHardwareBuffer_describe(
+        buffer: *const AndroidHardwareBuffer,
+        desc: *mut AndroidHardwareBufferDesc,
+    );
+    fn AHardwareBuffer_getNativeHandle(
+        buffer: *const AndroidHardwareBuffer,
+    ) -> *const AndroidNativeHandle;
+}
+
 use magma_gpu::util::Error as MagmaGpuError;
 use magma_gpu::util::FromRawDescriptor;
 use magma_gpu::util::Handle as MagmaGpuHandle;
@@ -539,37 +581,59 @@ impl Gfxstream {
             #[cfg(target_os = "android")]
             {
                 use crate::handle::AhbInfo;
-                use nativewindow::AhbInfo as NativeAhbInfo;
-                use nativewindow::HardwareBuffer;
-                use std::os::fd::IntoRawFd;
-                use std::ptr::NonNull;
 
-                let buffer_ptr = NonNull::new(stream_handle.os_handle as *mut c_void)
-                    .ok_or(RutabagaError::InvalidResourceId)?;
+                let buffer = stream_handle.os_handle as *mut AndroidHardwareBuffer;
+                if buffer.is_null() {
+                    return Err(RutabagaError::InvalidResourceId);
+                }
 
-                // SAFETY:
-                // Safe because `buffer_ptr` is a valid AHardwareBuffer pointer.
-                let buffer = unsafe { HardwareBuffer::clone_from_raw(buffer_ptr.cast()) };
+                // Keep this standalone build on public NDK APIs. AOSP's in-tree build uses the
+                // private libnativewindow_rs wrapper to serialize the same descriptor and handle.
+                unsafe { AHardwareBuffer_acquire(buffer) };
+                let mut desc: AndroidHardwareBufferDesc = unsafe { std::mem::zeroed() };
+                unsafe { AHardwareBuffer_describe(buffer, &mut desc) };
+                let native = unsafe { AHardwareBuffer_getNativeHandle(buffer) };
+                if native.is_null()
+                    || unsafe { (*native).num_fds } < 0
+                    || unsafe { (*native).num_ints } < 0
+                {
+                    unsafe { AHardwareBuffer_release(buffer) };
+                    return Err(RutabagaError::InvalidResourceId);
+                }
 
-                let ahb_info: NativeAhbInfo = buffer
-                    .try_into()
-                    .map_err(|_| RutabagaError::InvalidResourceId)?;
+                let fd_count = unsafe { (*native).num_fds as usize };
+                let int_count = unsafe { (*native).num_ints as usize };
+                let raw_data = unsafe {
+                    std::slice::from_raw_parts((*native).data.as_ptr(), fd_count + int_count)
+                };
+                let mut fds = Vec::with_capacity(fd_count);
+                for raw_fd in &raw_data[..fd_count] {
+                    let cloned_fd = unsafe { libc::dup(*raw_fd) };
+                    if cloned_fd < 0 {
+                        unsafe { AHardwareBuffer_release(buffer) };
+                        return Err(RutabagaError::InvalidResourceId);
+                    }
+                    fds.push(unsafe { OwnedDescriptor::from_raw_descriptor(cloned_fd) });
+                }
 
-                // Convert nativewindow::AhbInfo to RutabagaHandle::AhbInfo
-                let fds = ahb_info
-                    .fds
-                    .into_iter()
-                    .map(|fd| {
-                        // SAFETY:
-                        // Safe because the file descriptor is valid and owned.
-                        unsafe { OwnedDescriptor::from_raw_descriptor(fd.into_raw_fd()) }
-                    })
-                    .collect();
+                let desc_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        &desc as *const AndroidHardwareBufferDesc as *const u8,
+                        size_of::<AndroidHardwareBufferDesc>(),
+                    )
+                };
+                let ints_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        raw_data[fd_count..].as_ptr() as *const u8,
+                        int_count * size_of::<c_int>(),
+                    )
+                };
+                let mut metadata = Vec::with_capacity(desc_bytes.len() + ints_bytes.len());
+                metadata.extend_from_slice(desc_bytes);
+                metadata.extend_from_slice(ints_bytes);
+                unsafe { AHardwareBuffer_release(buffer) };
 
-                Ok(Arc::new(RutabagaHandle::from(AhbInfo {
-                    fds,
-                    metadata: ahb_info.data,
-                })))
+                Ok(Arc::new(RutabagaHandle::from(AhbInfo { fds, metadata })))
             }
             #[cfg(not(target_os = "android"))]
             {

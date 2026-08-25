@@ -24,6 +24,7 @@ fn virglrenderer() -> PkgConfigResult<()> {
 }
 
 fn gfxstream() -> PkgConfigResult<()> {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let mut gfxstream_path_env_override =
         // We use the unrecommended PROFILE environment variable here, because the Windows
         // downstream can set debug = true for the release profile to keep the symbol files.
@@ -42,10 +43,8 @@ fn gfxstream() -> PkgConfigResult<()> {
     if let Some(gfxstream_path) = gfxstream_path_env_override {
         println!("cargo:rustc-link-lib=gfxstream_backend");
         println!("cargo:rustc-link-search={gfxstream_path}");
-        Ok(())
     } else {
         let gfxstream_lib = pkg_config::Config::new().probe("gfxstream_backend")?;
-        let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
 
         if gfxstream_lib.defines.contains_key("GFXSTREAM_UNSTABLE") {
             println!("cargo:rustc-cfg=gfxstream_unstable");
@@ -59,22 +58,28 @@ fn gfxstream() -> PkgConfigResult<()> {
                 pkg_config::Config::new().probe("libdrm")?;
             }
         }
-
-        let mut use_clang = target_os.contains("macos");
-        if env::var("USE_CLANG").is_ok() {
-            use_clang = true;
-        }
-
-        // Need to link against libc++ or libstdc++.  Apple is clang-only, while by default other
-        // Unix platforms use libstdc++.
-        if use_clang {
-            println!("cargo:rustc-link-lib=dylib=c++");
-        } else if target_os.contains("linux") || target_os.contains("nto") {
-            println!("cargo:rustc-link-lib=dylib=stdc++");
-        }
-
-        Ok(())
     }
+
+    let use_clang = target_os.contains("macos") || env::var("USE_CLANG").is_ok();
+
+    // Need to link against libc++ or libstdc++. Apple and Android are clang-only, while other
+    // Unix platforms use libstdc++ by default.
+    if use_clang || target_os == "android" {
+        println!("cargo:rustc-link-lib=dylib=c++");
+    } else if target_os.contains("linux") || target_os.contains("nto") {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
+
+    // Android's Soong build supplies these dependencies implicitly. A standalone NDK build
+    // consumes gfxstream_backend through pkg-config or GFXSTREAM_PATH, so keep the equivalent
+    // system libraries explicit in the final Rust link.
+    if target_os == "android" {
+        for lib in ["android", "EGL", "GLESv2", "log", "vulkan"] {
+            println!("cargo:rustc-link-lib=dylib={lib}");
+        }
+    }
+
+    Ok(())
 }
 
 fn main() -> PkgConfigResult<()> {
