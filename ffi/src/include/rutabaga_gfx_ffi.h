@@ -189,6 +189,21 @@ struct rutabaga_handle {
     uint32_t handle_type;
 };
 
+/**
+ * Complete Android Hardware Buffer transport data.
+ *
+ * `metadata` is opaque nativewindow data containing the serialized
+ * AHardwareBuffer descriptor and native-handle integer payload.  A successful
+ * export owns every descriptor and both arrays until
+ * `rutabaga_free_ahb_info()` is called.
+ */
+struct rutabaga_ahb_info {
+    int64_t *fds;
+    size_t num_fds;
+    uint8_t *metadata;
+    size_t metadata_size;
+};
+
 struct rutabaga_mapping {
     void *ptr;
     uint64_t size;
@@ -363,6 +378,23 @@ int32_t rutabaga_resource_unref(struct rutabaga *ptr, uint32_t resource_id);
  */
 int32_t rutabaga_resource_export_blob(struct rutabaga *ptr, uint32_t resource_id,
                                       struct rutabaga_handle *handle);
+
+/**
+ * Export a gfxstream resource as a complete Android Hardware Buffer.
+ *
+ * `info` must be zero-initialized.  On success the caller must eventually call
+ * `rutabaga_free_ahb_info(info)`.  This API deliberately complements rather
+ * than changes `rutabaga_resource_export_blob()`, whose single-descriptor ABI
+ * cannot represent an AHardwareBuffer native handle.
+ */
+int32_t rutabaga_resource_export_ahb(struct rutabaga *ptr, uint32_t resource_id,
+                                    struct rutabaga_ahb_info *info);
+
+/**
+ * Close all descriptors and free all storage owned by `info`, then clear it.
+ * Passing NULL or an already-cleared value is safe.
+ */
+void rutabaga_free_ahb_info(struct rutabaga_ahb_info *info);
 
 int32_t rutabaga_resource_map(struct rutabaga *ptr, uint32_t resource_id,
                               struct rutabaga_mapping *mapping);

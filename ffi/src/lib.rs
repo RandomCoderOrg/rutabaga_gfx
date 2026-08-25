@@ -29,6 +29,7 @@ use std::sync::OnceLock;
 use libc::iovec;
 use libc::EINVAL;
 use libc::ESRCH;
+use rutabaga_gfx::AhbInfo as RutabagaAhbInfo;
 use rutabaga_gfx::ResourceCreate3D;
 use rutabaga_gfx::ResourceCreateBlob;
 use rutabaga_gfx::Rutabaga;
@@ -129,6 +130,41 @@ pub struct rutabaga_iovecs {
 pub struct rutabaga_handle {
     pub os_handle: i64,
     pub handle_type: u32,
+}
+
+/// Owned AHardwareBuffer transport data returned through the C API.
+///
+/// The file descriptors and opaque metadata are allocated by Rust and must be
+/// released with `rutabaga_free_ahb_info`.  The metadata contains the
+/// serialized AHardwareBuffer descriptor followed by the native handle's
+/// integer payload; consumers must treat it as opaque unless they implement
+/// the matching Android nativewindow contract.
+#[repr(C)]
+pub struct rutabaga_ahb_info {
+    pub fds: *mut i64,
+    pub num_fds: usize,
+    pub metadata: *mut u8,
+    pub metadata_size: usize,
+}
+
+impl Default for rutabaga_ahb_info {
+    fn default() -> Self {
+        Self {
+            fds: null_mut(),
+            num_fds: 0,
+            metadata: null_mut(),
+            metadata_size: 0,
+        }
+    }
+}
+
+impl rutabaga_ahb_info {
+    fn is_empty(&self) -> bool {
+        self.fds.is_null()
+            && self.num_fds == 0
+            && self.metadata.is_null()
+            && self.metadata_size == 0
+    }
 }
 
 #[repr(C)]
@@ -633,6 +669,109 @@ pub extern "C" fn rutabaga_resource_export_blob(
     .unwrap_or(-ESRCH)
 }
 
+fn leak_vec<T>(mut values: Vec<T>) -> (*mut T, usize) {
+    if values.is_empty() {
+        return (null_mut(), 0);
+    }
+
+    let ptr = values.as_mut_ptr();
+    let len = values.len();
+    std::mem::forget(values);
+    (ptr, len)
+}
+
+fn export_ahb_info(info: RutabagaAhbInfo, output: &mut rutabaga_ahb_info) -> i32 {
+    if !output.is_empty() {
+        return -EINVAL;
+    }
+
+    let raw_fds = info
+        .fds
+        .into_iter()
+        .map(|fd| fd.into_raw_descriptor() as i64)
+        .collect();
+    let (fds, num_fds) = leak_vec(raw_fds);
+    let (metadata, metadata_size) = leak_vec(info.metadata);
+
+    output.fds = fds;
+    output.num_fds = num_fds;
+    output.metadata = metadata;
+    output.metadata_size = metadata_size;
+    NO_ERROR
+}
+
+/// Exports an Android Hardware Buffer without collapsing its native handle to
+/// a single file descriptor.
+///
+/// The caller must pass a zero-initialized `rutabaga_ahb_info` and release a
+/// successful result with `rutabaga_free_ahb_info`.
+///
+/// # Safety
+/// `output` must be null or point to writable storage for one
+/// `rutabaga_ahb_info`.
+#[no_mangle]
+pub unsafe extern "C" fn rutabaga_resource_export_ahb(
+    ptr: &mut rutabaga,
+    resource_id: u32,
+    output: *mut rutabaga_ahb_info,
+) -> i32 {
+    if output.is_null() {
+        return -EINVAL;
+    }
+
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = ptr.export_blob(resource_id);
+        let handle = return_on_error!(result);
+        let info = return_on_error!(RutabagaAhbInfo::try_from(handle));
+        // SAFETY: validated above and guaranteed writable by the function
+        // contract.
+        let output = unsafe { &mut *output };
+        export_ahb_info(info, output)
+    }))
+    .unwrap_or(-ESRCH)
+}
+
+/// Releases an AHardwareBuffer export produced by
+/// `rutabaga_resource_export_ahb`.
+///
+/// # Safety
+/// `info` must be null or point to a value initialized by this library.  It
+/// must not be released more than once without another successful export.
+#[no_mangle]
+pub unsafe extern "C" fn rutabaga_free_ahb_info(info: *mut rutabaga_ahb_info) {
+    if info.is_null() {
+        return;
+    }
+
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: guaranteed by the function contract above.
+        let info = unsafe { &mut *info };
+
+        if !info.fds.is_null() {
+            // SAFETY: the allocation was leaked by `export_ahb_info` with
+            // matching length and capacity.
+            let raw_fds = unsafe { Vec::from_raw_parts(info.fds, info.num_fds, info.num_fds) };
+            for raw_fd in raw_fds {
+                // SAFETY: each descriptor is owned by this export and has not
+                // been released yet.
+                drop(unsafe {
+                    RutabagaDescriptor::from_raw_descriptor(raw_fd as RutabagaRawDescriptor)
+                });
+            }
+        }
+
+        if !info.metadata.is_null() {
+            // SAFETY: the allocation was leaked by `export_ahb_info` with
+            // matching length and capacity.
+            drop(unsafe {
+                Vec::from_raw_parts(info.metadata, info.metadata_size, info.metadata_size)
+            });
+        }
+
+        *info = rutabaga_ahb_info::default();
+    }));
+}
+
 #[no_mangle]
 pub extern "C" fn rutabaga_resource_map(
     ptr: &mut rutabaga,
@@ -736,4 +875,82 @@ pub unsafe extern "C" fn rutabaga_restore(ptr: &mut rutabaga, dir: *const c_char
         return_result(result)
     }))
     .unwrap_or(-ESRCH)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs::File;
+    use std::os::fd::IntoRawFd;
+
+    use super::*;
+
+    #[test]
+    fn ahb_info_ffi_preserves_all_descriptors_and_metadata() {
+        let descriptors = (0..3)
+            .map(|_| {
+                let file = File::open("/dev/null").unwrap();
+                // SAFETY: ownership of the descriptor moves from `File` into
+                // `RutabagaDescriptor` exactly once.
+                unsafe { RutabagaDescriptor::from_raw_descriptor(file.into_raw_fd()) }
+            })
+            .collect();
+        let metadata = vec![0x41, 0x48, 0x42, 0x00, 0x7f, 0xff];
+        let mut output = rutabaga_ahb_info::default();
+
+        assert_eq!(
+            export_ahb_info(
+                RutabagaAhbInfo {
+                    fds: descriptors,
+                    metadata: metadata.clone()
+                },
+                &mut output
+            ),
+            NO_ERROR
+        );
+        assert_eq!(output.num_fds, 3);
+        assert_eq!(output.metadata_size, metadata.len());
+
+        // SAFETY: both slices are backed by allocations owned by `output`.
+        let exported_fds = unsafe { from_raw_parts(output.fds, output.num_fds) };
+        let raw_fds = exported_fds.to_vec();
+        // SAFETY: both slices are backed by allocations owned by `output`.
+        let exported_metadata = unsafe { from_raw_parts(output.metadata, output.metadata_size) };
+        assert_eq!(exported_metadata, metadata);
+        for fd in &raw_fds {
+            // A non-negative result proves every descriptor, not only the
+            // first, remains valid at the C ABI boundary.
+            assert!(unsafe { libc::fcntl(*fd as i32, libc::F_GETFD) } >= 0);
+        }
+
+        // SAFETY: `output` was initialized by `export_ahb_info` and has not
+        // previously been released.
+        unsafe { rutabaga_free_ahb_info(&mut output) };
+        assert!(output.is_empty());
+        for fd in raw_fds {
+            assert_eq!(unsafe { libc::fcntl(fd as i32, libc::F_GETFD) }, -1);
+        }
+
+        // A cleared value is intentionally safe to release again.
+        unsafe { rutabaga_free_ahb_info(&mut output) };
+    }
+
+    #[test]
+    fn ahb_info_ffi_rejects_nonempty_output() {
+        let mut output = rutabaga_ahb_info {
+            fds: null_mut(),
+            num_fds: 1,
+            metadata: null_mut(),
+            metadata_size: 0,
+        };
+        assert_eq!(
+            export_ahb_info(
+                RutabagaAhbInfo {
+                    fds: Vec::new(),
+                    metadata: Vec::new()
+                },
+                &mut output
+            ),
+            -EINVAL
+        );
+    }
 }
