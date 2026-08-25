@@ -42,6 +42,8 @@ use rutabaga_gfx::RUTABAGA_MAP_ACCESS_RW;
 use rutabaga_gfx::RUTABAGA_MAP_CACHE_CACHED;
 use thiserror::Error;
 
+use crate::presenter::PresenterClient;
+
 const SNAPSHOT_DIR: &str = "/tmp/";
 
 #[sorted]
@@ -103,11 +105,16 @@ pub struct KumquatGpu {
     rutabaga: Rutabaga,
     fence_state: FenceState,
     id_allocator: u32,
+    presenter: Option<PresenterClient>,
     resources: Map<u32, KumquatGpuResource>,
 }
 
 impl KumquatGpu {
-    pub fn new(capset_names: String, renderer_features: String) -> KumquatGpuResult<KumquatGpu> {
+    pub fn new(
+        capset_names: String,
+        renderer_features: String,
+        presenter_socket_path: Option<&str>,
+    ) -> KumquatGpuResult<KumquatGpu> {
         let capset_mask = calculate_capset_mask(capset_names.as_str().split(":"));
         if capset_mask == 0 {
             return Err(MagmaGpuError::Unsupported.into());
@@ -132,10 +139,15 @@ impl KumquatGpu {
             .set_renderer_features(renderer_features_opt)
             .build()?;
 
+        let presenter = presenter_socket_path
+            .map(PresenterClient::connect)
+            .transpose()?;
+
         Ok(KumquatGpu {
             rutabaga,
             fence_state,
             id_allocator: 0,
+            presenter,
             resources: Default::default(),
         })
     }
@@ -479,6 +491,9 @@ impl KumquatGpuConnection {
                         return Err(RutabagaError::InvalidResourceId.into());
                     }
                     kumquat_gpu.rutabaga.resource_flush(cmd.resource_id)?;
+                    if let Some(presenter) = kumquat_gpu.presenter.as_mut() {
+                        presenter.register_resource(&mut kumquat_gpu.rutabaga, cmd.resource_id)?;
+                    }
 
                     let resp = kumquat_gpu_protocol_ctrl_hdr {
                         type_: KUMQUAT_GPU_PROTOCOL_RESP_NODATA,

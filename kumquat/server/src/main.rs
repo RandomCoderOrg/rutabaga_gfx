@@ -4,6 +4,7 @@
 
 mod kumquat;
 mod kumquat_gpu;
+mod presenter;
 
 use clap::Parser;
 use kumquat::KumquatBuilder;
@@ -28,6 +29,10 @@ struct Args {
     #[arg(long, default_value = "")]
     renderer_features: String,
 
+    /// Optional uDroid AHardwareBuffer presenter socket.
+    #[arg(long)]
+    presenter_socket_path: Option<String>,
+
     /// An OS-specific pipe descriptor to the parent process
     #[arg(long, default_value = "0")]
     pipe_descriptor: i64,
@@ -40,6 +45,7 @@ fn main() -> KumquatGpuResult<()> {
         .set_capset_names(args.capset_names)
         .set_gpu_socket((!args.gpu_socket_path.is_empty()).then_some(args.gpu_socket_path))
         .set_renderer_features(args.renderer_features)
+        .set_presenter_socket(args.presenter_socket_path)
         .build()?;
 
     if args.pipe_descriptor != 0 {

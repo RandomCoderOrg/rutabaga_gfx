@@ -81,6 +81,7 @@ impl Kumquat {
 pub struct KumquatBuilder {
     capset_names_opt: Option<String>,
     gpu_socket_opt: Option<String>,
+    presenter_socket_opt: Option<String>,
     renderer_features_opt: Option<String>,
 }
 
@@ -89,6 +90,7 @@ impl KumquatBuilder {
         KumquatBuilder {
             capset_names_opt: None,
             gpu_socket_opt: None,
+            presenter_socket_opt: None,
             renderer_features_opt: None,
         }
     }
@@ -105,6 +107,11 @@ impl KumquatBuilder {
 
     pub fn set_renderer_features(mut self, renderer_features: String) -> KumquatBuilder {
         self.renderer_features_opt = Some(renderer_features);
+        self
+    }
+
+    pub fn set_presenter_socket(mut self, presenter_socket_opt: Option<String>) -> KumquatBuilder {
+        self.presenter_socket_opt = presenter_socket_opt;
         self
     }
 
@@ -125,6 +132,7 @@ impl KumquatBuilder {
             kumquat_gpu_opt = Some(KumquatGpu::new(
                 self.capset_names_opt.unwrap(),
                 self.renderer_features_opt.unwrap(),
+                self.presenter_socket_opt.as_deref(),
             )?);
 
             let gpu_listener = Listener::bind(path)?;

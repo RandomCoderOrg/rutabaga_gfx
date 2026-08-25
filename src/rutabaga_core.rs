@@ -14,7 +14,6 @@ use magma_gpu::util::Error as MagmaGpuError;
 use magma_gpu::util::Handle as MagmaGpuHandle;
 use magma_gpu::util::MemoryMapping;
 use magma_gpu::util::OwnedDescriptor;
-#[cfg(gfxstream_unstable)]
 use magma_gpu::util::RawDescriptor;
 use magma_gpu::util::RawMapping;
 use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_SHM;
@@ -307,7 +306,6 @@ pub trait RutabagaComponent {
     }
 
     /// Sends an Android hardware-buffer resource over a connected Unix socket.
-    #[cfg(gfxstream_unstable)]
     fn resource_send_hardware_buffer(
         &self,
         _resource: &RutabagaResource,
@@ -934,7 +932,6 @@ impl Rutabaga {
     }
 
     /// Sends an Android hardware-buffer resource over a connected Unix socket.
-    #[cfg(gfxstream_unstable)]
     pub fn resource_send_hardware_buffer(
         &self,
         resource_id: u32,
