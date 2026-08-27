@@ -25,6 +25,7 @@ fn virglrenderer() -> PkgConfigResult<()> {
 
 fn gfxstream() -> PkgConfigResult<()> {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    println!("cargo:rerun-if-env-changed=GFXSTREAM_UNSTABLE");
     let mut gfxstream_path_env_override =
         // We use the unrecommended PROFILE environment variable here, because the Windows
         // downstream can set debug = true for the release profile to keep the symbol files.
@@ -43,6 +44,9 @@ fn gfxstream() -> PkgConfigResult<()> {
     if let Some(gfxstream_path) = gfxstream_path_env_override {
         println!("cargo:rustc-link-lib=gfxstream_backend");
         println!("cargo:rustc-link-search={gfxstream_path}");
+        if env::var("GFXSTREAM_UNSTABLE").as_deref() == Ok("1") {
+            println!("cargo:rustc-cfg=gfxstream_unstable");
+        }
     } else {
         let gfxstream_lib = pkg_config::Config::new().probe("gfxstream_backend")?;
 
