@@ -168,6 +168,17 @@ impl KumquatStream {
                     });
                     KumquatGpuProtocol::ResourceFlush(cmd, handle)
                 }
+                KUMQUAT_GPU_PROTOCOL_RESOURCE_SEND_HARDWARE_BUFFER => {
+                    let cmd = reader.read_obj()?;
+                    let os_handle = descriptors.pop_front().ok_or(Error::Unsupported)?;
+                    KumquatGpuProtocol::ResourceSendHardwareBuffer(
+                        cmd,
+                        Handle {
+                            os_handle,
+                            handle_type: 0,
+                        },
+                    )
+                }
                 KUMQUAT_GPU_PROTOCOL_RESP_NODATA => {
                     reader.consume(size_of::<kumquat_gpu_protocol_ctrl_hdr>());
                     KumquatGpuProtocol::RespNoData

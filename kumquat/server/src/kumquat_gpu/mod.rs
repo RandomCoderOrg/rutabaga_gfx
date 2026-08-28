@@ -15,6 +15,7 @@ use magma_gpu::protocols::ipc::KumquatStream;
 use magma_gpu::protocols::kumquat_gpu_protocol::*;
 use magma_gpu::util::create_event_pair;
 use magma_gpu::util::AsBorrowedDescriptor;
+use magma_gpu::util::AsRawDescriptor;
 use magma_gpu::util::Error as MagmaGpuError;
 use magma_gpu::util::EventSignaler;
 use magma_gpu::util::Handle as MagmaGpuHandle;
@@ -537,6 +538,20 @@ impl KumquatGpuConnection {
                         };
                         self.stream.write(KumquatGpuProtocolWrite::Cmd(resp))?;
                     }
+                }
+                KumquatGpuProtocol::ResourceSendHardwareBuffer(cmd, socket) => {
+                    if !kumquat_gpu.resources.contains_key(&cmd.resource_id) {
+                        return Err(RutabagaError::InvalidResourceId.into());
+                    }
+                    kumquat_gpu.rutabaga.resource_send_hardware_buffer(
+                        cmd.resource_id,
+                        socket.os_handle.as_raw_descriptor(),
+                    )?;
+                    let resp = kumquat_gpu_protocol_ctrl_hdr {
+                        type_: KUMQUAT_GPU_PROTOCOL_RESP_NODATA,
+                        payload: 0,
+                    };
+                    self.stream.write(KumquatGpuProtocolWrite::Cmd(resp))?;
                 }
                 KumquatGpuProtocol::SnapshotSave => {
                     kumquat_gpu.rutabaga.snapshot(Path::new(SNAPSHOT_DIR))?;
